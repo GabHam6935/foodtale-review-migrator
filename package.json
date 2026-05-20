@@ -1,0 +1,20 @@
+﻿{
+  "name": "foodtale-review-migrator",
+  "version": "1.0.0",
+  "description": "Backfill missing review aspect ratios for Foodtale reviews.",
+  "main": "src/index.js",
+  "scripts": {
+    "dry-run": "node -r dotenv/config src/index.js --dry-run",
+    "migrate": "node -r dotenv/config src/index.js",
+    "check": "node --check src/index.js && node --check src/reviewModel.js && node --check src/imageMetadata.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.832.0",
+    "dotenv": "^16.4.7",
+    "mongoose": "^8.10.0",
+    "sharp": "^0.34.5"
+  }
+}
