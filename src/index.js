@@ -84,8 +84,8 @@ function parseArgs(argv) {
   }
 
   args.resultCollectionName = validateCollectionName(args.resultCollectionName);
-  if (args.resultCollectionName === SOURCE_COLLECTION_NAME) {
-    throw new Error("Result collection cannot be the source reviews collection");
+  if (args.resultCollectionName === SOURCE_COLLECTION_NAME && args.resetResultCollection) {
+    throw new Error("--reset-result-collection cannot be used when updating the source reviews collection");
   }
   return args;
 }
