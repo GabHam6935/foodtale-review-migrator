@@ -22,7 +22,7 @@ const REQUIRED_ENV = [
 ];
 
 const SOURCE_COLLECTION_NAME = "reviews";
-const DEFAULT_RESULT_COLLECTION_NAME = "reviews_test";
+const DEFAULT_RESULT_COLLECTION_NAME = SOURCE_COLLECTION_NAME;
 
 function parseArgs(argv) {
   const args = {
@@ -153,9 +153,12 @@ function createStats() {
     scanned: 0,
     wouldCopy: 0,
     copied: 0,
+    wouldUpdate: 0,
+    updated: 0,
+    skippedWithoutUpdate: 0,
     keptExistingAspectRatio: 0,
     computedAspectRatio: 0,
-    copiedWithoutAspectRatio: 0,
+    leftWithoutAspectRatio: 0,
     skippedInvalidDimensions: 0,
     failed: 0,
   };
@@ -199,7 +202,7 @@ async function buildReviewCopy(review, context) {
 
   const imagePath = firstImagePath(copy.media_paths);
   if (!imagePath) {
-    stats.copiedWithoutAspectRatio += 1;
+    stats.leftWithoutAspectRatio += 1;
     return {
       document: copy,
       imagePath: null,
@@ -230,7 +233,7 @@ async function buildReviewCopy(review, context) {
     } else {
       stats.failed += 1;
     }
-    stats.copiedWithoutAspectRatio += 1;
+    stats.leftWithoutAspectRatio += 1;
 
     await appendFailureLog({
       review_id: String(copy._id),
@@ -300,10 +303,66 @@ async function processReview(review, context) {
   stats.scanned += 1;
 
   const prepared = await buildReviewCopy(review, context);
+  const aspectRatio = prepared.document.aspect_ratio ?? "missing";
+
+  if (args.resultCollectionName === SOURCE_COLLECTION_NAME) {
+    if (prepared.status !== "computed") {
+      stats.skippedWithoutUpdate += 1;
+      console.log(
+        `[unchanged] collection=${args.resultCollectionName} review=${review._id} status=${prepared.status} aspect_ratio=${aspectRatio}`,
+      );
+      return;
+    }
+
+    if (args.dryRun) {
+      stats.wouldUpdate += 1;
+      console.log(
+        `[dry-run] collection=${args.resultCollectionName} review=${review._id} status=${prepared.status} aspect_ratio=${aspectRatio}`,
+      );
+      return;
+    }
+
+    try {
+      const result = await resultCollection.updateOne(
+        {
+          _id: prepared.document._id,
+          $or: [
+            { aspect_ratio: { $exists: false } },
+            { aspect_ratio: null },
+            { aspect_ratio: { $lte: 0 } },
+          ],
+        },
+        { $set: { aspect_ratio: prepared.document.aspect_ratio } },
+      );
+
+      if (result.matchedCount === 0) {
+        stats.skippedWithoutUpdate += 1;
+        console.log(
+          `[unchanged] collection=${args.resultCollectionName} review=${review._id} status=already-updated aspect_ratio=${aspectRatio}`,
+        );
+        return;
+      }
+
+      stats.updated += 1;
+      console.log(
+        `[updated] collection=${args.resultCollectionName} review=${review._id} status=${prepared.status} aspect_ratio=${aspectRatio}`,
+      );
+    } catch (error) {
+      stats.failed += 1;
+      await appendFailureLog({
+        review_id: String(review._id),
+        result_collection: args.resultCollectionName,
+        stage: "update",
+        error: serializeError(error),
+        created_at: new Date().toISOString(),
+      });
+      console.error(`[update-failed] review=${review._id} error=${error.message}`);
+    }
+    return;
+  }
 
   if (args.dryRun) {
     stats.wouldCopy += 1;
-    const aspectRatio = prepared.document.aspect_ratio ?? "missing";
     console.log(
       `[dry-run] collection=${args.resultCollectionName} review=${review._id} status=${prepared.status} aspect_ratio=${aspectRatio}`,
     );
@@ -318,7 +377,6 @@ async function processReview(review, context) {
     );
 
     stats.copied += 1;
-    const aspectRatio = prepared.document.aspect_ratio ?? "missing";
     console.log(
       `[copied] collection=${args.resultCollectionName} review=${review._id} status=${prepared.status} aspect_ratio=${aspectRatio}`,
     );
@@ -355,7 +413,7 @@ async function run() {
   validateEnv();
 
   console.log(
-    `Starting review mirror migrator mode=${args.dryRun ? "dry-run" : "copy"} sourceCollection=${SOURCE_COLLECTION_NAME} resultCollection=${args.resultCollectionName} limit=${args.limit ?? "none"} batchSize=${args.batchSize} concurrency=${args.concurrency} reset=${args.resetResultCollection}`,
+    `Starting review aspect-ratio migrator mode=${args.dryRun ? "dry-run" : "write"} sourceCollection=${SOURCE_COLLECTION_NAME} targetCollection=${args.resultCollectionName} limit=${args.limit ?? "none"} batchSize=${args.batchSize} concurrency=${args.concurrency} reset=${args.resetResultCollection}`,
   );
 
   await connectMongo();
@@ -363,7 +421,7 @@ async function run() {
   const stats = createStats();
   const resultCollection = mongoose.connection.collection(args.resultCollectionName);
   await resetResultCollectionIfRequested(resultCollection, args);
-  if (!args.dryRun) {
+  if (!args.dryRun && args.resultCollectionName !== SOURCE_COLLECTION_NAME) {
     await ensureResultCollectionIndexes(resultCollection);
   }
 
